@@ -1,0 +1,127 @@
+-- 1. PRESERVE EXISTING TABLES (Do not drop if you want to keep data)
+-- If starting fresh, uncomment the drops below:
+-- DROP TABLE IF EXISTS public.patients CASCADE;
+-- DROP TABLE IF EXISTS public.beds CASCADE;
+-- DROP TABLE IF EXISTS public.staff CASCADE;
+-- DROP TABLE IF EXISTS public.inventory CASCADE;
+-- DROP TABLE IF EXISTS public.documents CASCADE;
+-- DROP TABLE IF EXISTS public.forecasts CASCADE;
+-- DROP TABLE IF EXISTS public.simulations CASCADE;
+-- DROP TABLE IF EXISTS public.audit_logs CASCADE;
+
+-- 2. CORE TABLES (Ensure these exist)
+CREATE TABLE IF NOT EXISTS public.staff (
+    id text PRIMARY KEY,
+    name text NOT NULL,
+    role text NOT NULL,
+    skill_level integer NOT NULL,
+    current_fatigue_score integer DEFAULT 0,
+    max_hours_shift integer DEFAULT 12,
+    current_hours_worked integer DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS public.beds (
+    id text PRIMARY KEY,
+    ward text NOT NULL,
+    is_occupied boolean DEFAULT false,
+    is_reserved boolean DEFAULT false,
+    required_skill_level integer DEFAULT 1,
+    assigned_patient_id text,
+    assigned_staff_id text REFERENCES public.staff(id)
+);
+
+CREATE TABLE IF NOT EXISTS public.inventory (
+    id text PRIMARY KEY,
+    item_name text NOT NULL,
+    category text NOT NULL,
+    current_stock integer DEFAULT 0,
+    reorder_threshold integer DEFAULT 10,
+    usage_rate_per_surgery double precision DEFAULT 1.0,
+    -- New fields for Auto-Reorder
+    predicted_runout_date date,
+    last_reorder_suggestion jsonb
+);
+
+CREATE TABLE IF NOT EXISTS public.patients (
+    id text PRIMARY KEY,
+    name text NOT NULL,
+    acuity_score integer NOT NULL,
+    condition text,
+    detailed_condition text,
+    history jsonb DEFAULT '[]'::jsonb,
+    status text DEFAULT 'Waiting',
+    assigned_bed_id text REFERENCES public.beds(id),
+    assigned_staff_id text REFERENCES public.staff(id),
+    -- New fields for AI Triage & Risk
+    triage_score float,
+    triage_history jsonb DEFAULT '[]'::jsonb,
+    risk_profile jsonb DEFAULT '{}'::jsonb,
+    vitals jsonb DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS public.appointments (
+  id uuid default gen_random_uuid() primary key,
+  doctor_name text not null,
+  patient_name text not null,
+  time text not null,
+  reason text,
+  status text default 'Confirmed',
+  created_at timestamptz default now()
+);
+
+-- 3. NEW TABLES FOR AI FEATURES
+
+-- Documents & Summarization
+CREATE TABLE IF NOT EXISTS public.documents (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    patient_id text REFERENCES public.patients(id),
+    filename text NOT NULL,
+    content_text text, -- Extracted text
+    summary text, -- AI Summary
+    critical_flags jsonb DEFAULT '[]'::jsonb,
+    uploaded_at timestamptz DEFAULT now()
+);
+
+-- Forecasting Logic
+CREATE TABLE IF NOT EXISTS public.forecasts (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    created_at timestamptz DEFAULT now(),
+    horizon_hours integer NOT NULL, -- 24 or 48
+    metrics jsonb NOT NULL -- { beds_available, discharges, critical_items }
+);
+
+-- Surge Simulation Results
+CREATE TABLE IF NOT EXISTS public.simulations (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    created_at timestamptz DEFAULT now(),
+    scenario_name text,
+    parameters jsonb, -- { patient_count, severity_dist }
+    impact_analysis jsonb -- { bed_shortfall, staff_shortfall }
+);
+
+-- Audit Logs (Good practice for AI actions)
+CREATE TABLE IF NOT EXISTS public.audit_logs (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    action text NOT NULL,
+    resource_type text,
+    resource_id text,
+    details jsonb,
+    timestamp timestamptz DEFAULT now()
+);
+
+-- 4. RELATIONSHIPS & REALTIME
+-- Fix circular dependency if not exists
+DO $$ 
+BEGIN 
+  IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'fk_beds_patient') THEN
+    ALTER TABLE public.beds 
+    ADD CONSTRAINT fk_beds_patient 
+    FOREIGN KEY (assigned_patient_id) REFERENCES public.patients(id);
+  END IF;
+END $$;
+
+-- Enable Realtime
+ALTER PUBLICATION supabase_realtime ADD TABLE public.staff, public.beds, public.inventory, public.patients, public.appointments, public.documents, public.forecasts, public.simulations;
+
+-- 5. STORAGE BUCKETS (Run this manually in Supabase Dashboard if SQL fails)
+-- INSERT INTO storage.buckets (id, name, public) VALUES ('medical-docs', 'medical-docs', true) ON CONFLICT DO NOTHING;

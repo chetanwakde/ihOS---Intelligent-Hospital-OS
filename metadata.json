@@ -1,0 +1,5 @@
+{
+  "name": "ihOS - Intelligent Hospital OS",
+  "description": "A vertical slice prototype of a Smart Hospital Operating System. Features intelligent bed allocation, fatigue-managed staff scheduling, and predictive inventory monitoring powered by predictive algorithms and GenAI.",
+  "requestFramePermissions": []
+}
